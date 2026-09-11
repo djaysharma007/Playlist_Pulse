@@ -1,75 +1,118 @@
-import os
+from pathlib import Path
 import sys
-import pandas as pd
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
 
-# ------------------------------------------------------------
-# Allow importing ingest.py when this file is executed directly
-# ------------------------------------------------------------
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
 
-from ingest import load_and_validate_data
+# -------------------------------------------------------------------
+# Project paths
+# -------------------------------------------------------------------
 
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parents[1]
 
-# ------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
-PLAYLIST_DATA_PATH = os.path.join(
-    "src", "data", "raw_playlist_data.csv"
+from ingest import (
+    load_and_validate_data,
+    load_and_validate_regression_data,
 )
 
-CLASSIFICATION_DATA_PATH = os.path.join(
-    "src", "data", "classification.csv"
-)
 
-FIGURES_PATH = os.path.join(
-    "reports", "figures"
-)
+PLAYLIST_DATA_PATH = PROJECT_ROOT / "src" / "data" / "raw_playlist_data.csv"
+CLASSIFICATION_DATA_PATH = PROJECT_ROOT / "src" / "data" / "classification.csv"
+REGRESSION_DATA_PATH = PROJECT_ROOT / "src" / "data" / "regression.csv"
 
-os.makedirs(FIGURES_PATH, exist_ok=True)
+FIGURES_PATH = PROJECT_ROOT / "reports" / "figures"
+FIGURES_PATH.mkdir(parents=True, exist_ok=True)
 
 sns.set_theme(style="whitegrid")
 
 
-# ============================================================
-# PART A — PLAYLIST DATASET EDA
-# ============================================================
+# -------------------------------------------------------------------
+# Utility functions
+# -------------------------------------------------------------------
+
+def calculate_iqr_outliers(df, columns):
+    """
+    Calculate IQR-based outlier counts for the specified columns.
+
+    Returns:
+        pd.DataFrame: Feature names, lower bounds, upper bounds,
+                      and outlier counts.
+    """
+    results = []
+
+    for column in columns:
+        q1 = df[column].quantile(0.25)
+        q3 = df[column].quantile(0.75)
+        iqr = q3 - q1
+
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+
+        outlier_mask = (
+            (df[column] < lower_bound)
+            | (df[column] > upper_bound)
+        )
+
+        results.append(
+            {
+                "feature": column,
+                "q1": q1,
+                "q3": q3,
+                "iqr": iqr,
+                "lower_bound": lower_bound,
+                "upper_bound": upper_bound,
+                "outlier_count": int(outlier_mask.sum()),
+            }
+        )
+
+    return pd.DataFrame(results)
+
+
+def save_figure(filename):
+    """
+    Save the current matplotlib figure to the reports directory.
+    """
+    output_path = FIGURES_PATH / filename
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
+# -------------------------------------------------------------------
+# Playlist dataset analysis
+# -------------------------------------------------------------------
 
 def analyze_playlist_dataset():
-
-    print("\n" + "=" * 60)
+    """
+    Perform exploratory analysis on the original playlist dataset.
+    """
+    print("\n" + "=" * 70)
     print("PLAYLIST DATASET — EXPLORATORY DATA ANALYSIS")
-    print("=" * 60)
+    print("=" * 70)
 
-    # --------------------------------------------------------
-    # 1. Load Data using the Ingestion Pipeline
-    # --------------------------------------------------------
+    df = load_and_validate_data(str(PLAYLIST_DATA_PATH))
 
-    df = load_and_validate_data(PLAYLIST_DATA_PATH)
+    print("\n" + "-" * 70)
+    print("DATASET DIMENSIONS")
+    print("-" * 70)
+    print(f"Rows: {df.shape[0]}")
+    print(f"Columns: {df.shape[1]}")
 
-    print("\n" + "=" * 60)
-    print("--- 1. DATASET DIMENSIONS ---")
-
-    print(f"Total Rows (Samples): {df.shape[0]}")
-    print(f"Total Columns (Metrics): {df.shape[1]}")
-
-    # --------------------------------------------------------
-    # 2. Feature Names & Data Types
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 2. FEATURE NAMES & DATA TYPES ---")
-
+    print("\n" + "-" * 70)
+    print("FEATURE NAMES AND DATA TYPES")
+    print("-" * 70)
     print(df.dtypes)
 
-    # Identify categorical and numerical columns
     categorical_columns = df.select_dtypes(
-        include=["object", "str", "string", "category"]
+        include=["object", "string", "category"]
     ).columns.tolist()
 
     numerical_columns = df.select_dtypes(
@@ -82,53 +125,37 @@ def analyze_playlist_dataset():
     print("\nNumerical Features:")
     print(numerical_columns)
 
-    # --------------------------------------------------------
-    # 3. Missing Values & Duplicates
-    # --------------------------------------------------------
+    print("\n" + "-" * 70)
+    print("MISSING VALUES AND DUPLICATES")
+    print("-" * 70)
 
-    print("\n" + "=" * 60)
-    print("--- 3. MISSING VALUES & DUPLICATES ---")
+    missing_values = df.isnull().sum()
 
-    missing_vals = df.isnull().sum()
-
-    if missing_vals.sum() > 0:
-        print("Missing Values per Column:")
-        print(missing_vals[missing_vals > 0])
+    if missing_values.sum() > 0:
+        print("Missing values:")
+        print(missing_values[missing_values > 0])
     else:
         print("No missing values found.")
 
-    duplicates = df.duplicated().sum()
+    duplicate_count = df.duplicated().sum()
+    print(f"Duplicate records: {duplicate_count}")
 
-    print(f"Duplicate Records Count: {duplicates}")
+    print("\n" + "-" * 70)
+    print("SUMMARY STATISTICS")
+    print("-" * 70)
+    print(df[numerical_columns].describe())
 
-    # --------------------------------------------------------
-    # 4. Summary Statistics
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 4. SUMMARY STATISTICS (NUMERICAL FEATURES) ---")
-
-    numerical_df = df.select_dtypes(include=[np.number])
-
-    print(numerical_df.describe())
-
-    # --------------------------------------------------------
-    # 5. Categorical Distribution Analysis
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 5. CATEGORICAL DISTRIBUTION ANALYSIS ---")
+    print("\n" + "-" * 70)
+    print("GENRE DISTRIBUTION")
+    print("-" * 70)
 
     if "genre" in df.columns:
-
-        genre_counts = df["genre"].value_counts(
-            dropna=True
+        genre_counts = df["genre"].value_counts(dropna=True)
+        genre_percentages = (
+            df["genre"]
+            .value_counts(normalize=True, dropna=True)
+            .mul(100)
         )
-
-        genre_percentages = df["genre"].value_counts(
-            normalize=True,
-            dropna=True
-        ) * 100
 
         print("\nGenre Counts:")
         print(genre_counts)
@@ -136,105 +163,47 @@ def analyze_playlist_dataset():
         print("\nGenre Percentages:")
         print(genre_percentages)
 
-    else:
-
-        print("Genre column not found.")
-
-    # --------------------------------------------------------
-    # 6. Visualizations
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 6. GENERATING VISUALIZATIONS ---")
-
-    # --------------------------------------------------------
-    # A. Correlation Matrix
-    # --------------------------------------------------------
-
-    if len(numerical_df.columns) > 1:
-
+    # Correlation heatmap
+    if len(numerical_columns) > 1:
         plt.figure(figsize=(12, 9))
 
-        corr_matrix = numerical_df.corr()
+        correlation_matrix = df[numerical_columns].corr()
 
         sns.heatmap(
-            corr_matrix,
+            correlation_matrix,
             annot=True,
             cmap="coolwarm",
             fmt=".2f",
-            linewidths=0.5
+            linewidths=0.5,
         )
 
-        plt.title("Feature Correlation Matrix Heatmap")
+        plt.title("Feature Correlation Matrix")
+        save_figure("correlation_heatmap.png")
 
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "correlation_heatmap.png"
-            )
-        )
-
-        plt.close()
-
-        print(
-            "-> Saved correlation heatmap"
-        )
-
-    # --------------------------------------------------------
-    # B. Danceability vs Energy Scatter Plot
-    # --------------------------------------------------------
-
-    if (
-        "danceability" in df.columns
-        and "energy" in df.columns
-    ):
-
+    # Danceability vs energy
+    if {"danceability", "energy"}.issubset(df.columns):
         plt.figure(figsize=(8, 6))
 
         if "genre" in df.columns:
-
             sns.scatterplot(
                 data=df,
                 x="danceability",
                 y="energy",
                 hue="genre",
-                alpha=0.7
+                alpha=0.7,
             )
-
         else:
-
             sns.scatterplot(
                 data=df,
                 x="danceability",
                 y="energy",
-                alpha=0.7
+                alpha=0.7,
             )
 
-        plt.title(
-            "Danceability vs Energy"
-        )
+        plt.title("Danceability vs Energy")
+        save_figure("danceability_energy_scatter.png")
 
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "danceability_energy_scatter.png"
-            )
-        )
-
-        plt.close()
-
-        print(
-            "-> Saved danceability-energy scatter plot"
-        )
-
-    # --------------------------------------------------------
-    # C. Feature Distribution Plots
-    # --------------------------------------------------------
-
+    # Feature distributions
     distribution_columns = [
         "danceability",
         "energy",
@@ -244,541 +213,546 @@ def analyze_playlist_dataset():
         "instrumentalness",
         "liveness",
         "valence",
-        "tempo"
+        "tempo",
     ]
 
     for column in distribution_columns:
+        if column not in df.columns:
+            continue
 
-        if column in df.columns:
+        plt.figure(figsize=(8, 5))
 
-            plt.figure(figsize=(8, 5))
+        sns.histplot(
+            data=df,
+            x=column,
+            kde=True,
+        )
 
-            sns.histplot(
-                data=df,
-                x=column,
-                kde=True
-            )
+        plt.title(f"Distribution of {column}")
+        plt.xlabel(column)
+        plt.ylabel("Frequency")
 
-            plt.title(
-                f"Distribution of {column}"
-            )
+        save_figure(f"distribution_{column}.png")
 
-            plt.tight_layout()
-
-            filename = (
-                f"distribution_{column}.png"
-            )
-
-            plt.savefig(
-                os.path.join(
-                    FIGURES_PATH,
-                    filename
-                )
-            )
-
-            plt.close()
-
-            print(
-                f"-> Saved distribution plot for {column}"
-            )
-
-    # --------------------------------------------------------
-    # D. Genre Distribution
-    # --------------------------------------------------------
-
+    # Genre distribution
     if "genre" in df.columns:
-
         plt.figure(figsize=(12, 6))
 
         sns.countplot(
             data=df,
             x="genre",
-            order=df["genre"].value_counts().index
+            order=df["genre"].value_counts().index,
         )
 
-        plt.title(
-            "Genre Distribution"
-        )
+        plt.title("Genre Distribution")
+        plt.xlabel("Genre")
+        plt.ylabel("Number of Tracks")
+        plt.xticks(rotation=45, ha="right")
 
-        plt.xticks(
-            rotation=45,
-            ha="right"
-        )
+        save_figure("genre_distribution.png")
 
-        plt.tight_layout()
+    # IQR outlier analysis
+    print("\n" + "-" * 70)
+    print("OUTLIER ANALYSIS — IQR METHOD")
+    print("-" * 70)
 
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "genre_distribution.png"
-            )
-        )
+    outlier_report = calculate_iqr_outliers(
+        df,
+        numerical_columns,
+    )
 
-        plt.close()
-
+    for _, row in outlier_report.iterrows():
         print(
-            "-> Saved genre distribution plot"
+            f"{row['feature']}: "
+            f"{row['outlier_count']} outliers"
         )
 
-    # --------------------------------------------------------
-    # 7. Outlier Counts using IQR Method
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 7. OUTLIER COUNTS USING IQR METHOD ---")
-
-    for column in numerical_df.columns:
-
-        Q1 = numerical_df[column].quantile(0.25)
-        Q3 = numerical_df[column].quantile(0.75)
-
-        IQR = Q3 - Q1
-
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-
-        outlier_count = (
-            (numerical_df[column] < lower_bound)
-            | (numerical_df[column] > upper_bound)
-        ).sum()
-
-        print(
-            f"{column}: {outlier_count} outliers"
-        )
-
-    # --------------------------------------------------------
-    # 8. Outlier Boxplot
-    # --------------------------------------------------------
-
-    if len(numerical_df.columns) > 0:
-
+    # Outlier boxplot
+    if numerical_columns:
         plt.figure(figsize=(14, 8))
 
         sns.boxplot(
-            data=numerical_df,
-            orient="h"
+            data=df[numerical_columns],
+            orient="h",
         )
 
-        plt.title(
-            "Outlier Identification via Boxplots"
-        )
+        plt.title("Numerical Feature Outlier Analysis")
 
-        plt.tight_layout()
-
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "outliers_boxplot.png"
-            )
-        )
-
-        plt.close()
-
-        print(
-            "-> Saved outlier boxplot"
-        )
-
-    print(
-        "\nPlaylist dataset EDA completed successfully."
-    )
+        save_figure("outliers_boxplot.png")
 
 
-# ============================================================
-# PART B — CLASSIFICATION DATASET EDA
-# ============================================================
+# -------------------------------------------------------------------
+# Classification dataset analysis
+# -------------------------------------------------------------------
 
 def analyze_classification_dataset():
-
-    print("\n" + "=" * 60)
+    """
+    Perform exploratory analysis on the classification dataset.
+    """
+    print("\n" + "=" * 70)
     print("CLASSIFICATION DATASET — EXPLORATORY DATA ANALYSIS")
-    print("=" * 60)
+    print("=" * 70)
 
-    # --------------------------------------------------------
-    # 1. Load Classification Dataset
-    # --------------------------------------------------------
-
-    if not os.path.exists(
-        CLASSIFICATION_DATA_PATH
-    ):
-
+    if not CLASSIFICATION_DATA_PATH.exists():
         print(
-            f"Classification dataset not found at "
+            f"Classification dataset not found: "
             f"{CLASSIFICATION_DATA_PATH}"
         )
-
         return
 
     classification_df = pd.read_csv(
         CLASSIFICATION_DATA_PATH
     )
 
-    print("\n" + "=" * 60)
-    print("--- 1. CLASSIFICATION DATASET DIMENSIONS ---")
+    print("\n" + "-" * 70)
+    print("DATASET DIMENSIONS")
+    print("-" * 70)
+    print(f"Rows: {classification_df.shape[0]}")
+    print(f"Columns: {classification_df.shape[1]}")
 
-    print(
-        f"Total Rows (Samples): "
-        f"{classification_df.shape[0]}"
-    )
-
-    print(
-        f"Total Columns (Metrics): "
-        f"{classification_df.shape[1]}"
-    )
-
-    # --------------------------------------------------------
-    # 2. Features & Data Types
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 2. FEATURES & DATA TYPES ---")
-
-    print(
-        classification_df.dtypes
-    )
+    print("\n" + "-" * 70)
+    print("FEATURES AND DATA TYPES")
+    print("-" * 70)
+    print(classification_df.dtypes)
 
     print("\nFeature Names:")
+    print(classification_df.columns.tolist())
 
-    print(
-        classification_df.columns.tolist()
-    )
+    print("\n" + "-" * 70)
+    print("DATA QUALITY")
+    print("-" * 70)
 
-    # --------------------------------------------------------
-    # 3. Missing Values & Duplicates
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 3. DATA QUALITY CHECK ---")
-
-    missing_values = (
-        classification_df.isnull().sum()
-    )
+    missing_values = classification_df.isnull().sum()
 
     if missing_values.sum() > 0:
-
-        print(
-            "Missing Values per Column:"
-        )
-
-        print(
-            missing_values[
-                missing_values > 0
-            ]
-        )
-
+        print("Missing values:")
+        print(missing_values[missing_values > 0])
     else:
+        print("No missing values found.")
 
-        print(
-            "No missing values found."
-        )
+    duplicate_count = classification_df.duplicated().sum()
+    print(f"Duplicate records: {duplicate_count}")
 
-    duplicates = (
-        classification_df.duplicated().sum()
-    )
-
-    print(
-        f"Duplicate Records Count: "
-        f"{duplicates}"
-    )
-
-    # --------------------------------------------------------
-    # 4. Statistical Summary
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 4. SUMMARY STATISTICS ---")
-
-    print(
-        classification_df.describe()
-    )
-
-    # --------------------------------------------------------
-    # 5. Classification Target Analysis
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("--- 5. CLASS IMBALANCE ANALYSIS ---")
+    print("\n" + "-" * 70)
+    print("SUMMARY STATISTICS")
+    print("-" * 70)
+    print(classification_df.describe())
 
     target_column = "y"
 
-    if target_column in classification_df.columns:
+    print("\n" + "-" * 70)
+    print("TARGET DISTRIBUTION")
+    print("-" * 70)
 
-        class_counts = (
-            classification_df[
-                target_column
-            ].value_counts().sort_index()
-        )
+    if target_column not in classification_df.columns:
+        print("Target column 'y' not found.")
+        return
 
-        class_percentages = (
-            classification_df[
-                target_column
-            ].value_counts(
-                normalize=True
-            ).sort_index() * 100
-        )
-
-        print(
-            f"Target Column: {target_column}"
-        )
-
-        print(
-            "\nClass Counts:"
-        )
-
-        print(
-            class_counts
-        )
-
-        print(
-            "\nClass Percentages:"
-        )
-
-        print(
-            class_percentages
-        )
-
-        # Determine whether the classes are balanced
-        max_percentage = (
-            class_percentages.max()
-        )
-
-        min_percentage = (
-            class_percentages.min()
-        )
-
-        imbalance_difference = (
-            max_percentage - min_percentage
-        )
-
-        print(
-            "\nClass Distribution Assessment:"
-        )
-
-        if imbalance_difference <= 5:
-
-            print(
-                "The classification dataset "
-                "is balanced."
-            )
-
-        else:
-
-            print(
-                "The classification dataset "
-                "shows class imbalance."
-            )
-
-    else:
-
-        print(
-            "Target column 'y' not found."
-        )
-
-    # --------------------------------------------------------
-    # 6. Target Class Visualization
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print(
-        "--- 6. CLASSIFICATION VISUALIZATIONS ---"
+    class_counts = (
+        classification_df[target_column]
+        .value_counts()
+        .sort_index()
     )
 
-    if target_column in classification_df.columns:
+    class_percentages = (
+        classification_df[target_column]
+        .value_counts(normalize=True)
+        .sort_index()
+        .mul(100)
+    )
 
-        plt.figure(figsize=(7, 5))
+    print("Target Column:", target_column)
 
-        sns.countplot(
-            data=classification_df,
-            x=target_column
-        )
+    print("\nClass Counts:")
+    print(class_counts)
 
-        plt.title(
-            "Classification Target Distribution"
-        )
+    print("\nClass Percentages:")
+    print(class_percentages)
 
-        plt.xlabel(
-            "Class"
-        )
+    imbalance_difference = (
+        class_percentages.max()
+        - class_percentages.min()
+    )
 
-        plt.ylabel(
-            "Number of Samples"
-        )
+    if imbalance_difference <= 5:
+        print("\nClass distribution is approximately balanced.")
+    else:
+        print("\nClass distribution shows imbalance.")
 
-        plt.tight_layout()
+    # Target distribution
+    plt.figure(figsize=(7, 5))
 
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "classification_target_distribution.png"
-            )
-        )
+    sns.countplot(
+        data=classification_df,
+        x=target_column,
+    )
 
-        plt.close()
+    plt.title("Classification Target Distribution")
+    plt.xlabel("Class")
+    plt.ylabel("Number of Samples")
 
-        print(
-            "-> Saved classification target distribution"
-        )
+    save_figure("classification_target_distribution.png")
 
-    # --------------------------------------------------------
-    # 7. Classification Dataset Correlation
-    # --------------------------------------------------------
-
-    classification_numeric = (
-        classification_df.select_dtypes(
-            include=[np.number]
-        )
+    # Correlation analysis
+    classification_numeric = classification_df.select_dtypes(
+        include=[np.number]
     )
 
     if len(classification_numeric.columns) > 1:
-
         plt.figure(figsize=(8, 6))
 
-        classification_corr = (
-            classification_numeric.corr()
-        )
+        correlation_matrix = classification_numeric.corr()
 
         sns.heatmap(
-            classification_corr,
+            correlation_matrix,
             annot=True,
             cmap="coolwarm",
             fmt=".2f",
-            linewidths=0.5
+            linewidths=0.5,
         )
 
-        plt.title(
-            "Classification Dataset Correlation Matrix"
+        plt.title("Classification Dataset Correlation Matrix")
+
+        save_figure(
+            "classification_correlation_heatmap.png"
         )
 
-        plt.tight_layout()
+    # Outlier analysis
+    print("\n" + "-" * 70)
+    print("CLASSIFICATION FEATURE OUTLIERS")
+    print("-" * 70)
 
-        plt.savefig(
-            os.path.join(
-                FIGURES_PATH,
-                "classification_correlation_heatmap.png"
-            )
-        )
-
-        plt.close()
-
-        print(
-            "-> Saved classification correlation heatmap"
-        )
-
-    # --------------------------------------------------------
-    # 8. Classification Dataset Outlier Analysis
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print(
-        "--- 8. CLASSIFICATION DATASET OUTLIERS ---"
-    )
-
-    # Exclude target column from feature outlier analysis
     feature_columns = [
         column
         for column in classification_numeric.columns
         if column != target_column
     ]
 
-    classification_features = (
-        classification_df[
-            feature_columns
+    if feature_columns:
+        outlier_report = calculate_iqr_outliers(
+            classification_df,
+            feature_columns,
+        )
+
+        for _, row in outlier_report.iterrows():
+            print(
+                f"{row['feature']}: "
+                f"{row['outlier_count']} outliers"
+            )
+    else:
+        print(
+            "No numerical feature columns available "
+            "for outlier analysis."
+        )
+
+
+# -------------------------------------------------------------------
+# Stream count regression dataset analysis
+# -------------------------------------------------------------------
+
+def analyze_regression_dataset():
+    """
+    Perform exploratory analysis on the stream-count regression dataset.
+    """
+    print("\n" + "=" * 70)
+    print("STREAM COUNT REGRESSION DATASET — "
+          "EXPLORATORY DATA ANALYSIS")
+    print("=" * 70)
+
+    df = load_and_validate_regression_data(
+        str(REGRESSION_DATA_PATH)
+    )
+
+    print("\n" + "-" * 70)
+    print("DATASET DIMENSIONS")
+    print("-" * 70)
+    print(f"Rows: {df.shape[0]}")
+    print(f"Columns: {df.shape[1]}")
+
+    print("\n" + "-" * 70)
+    print("FEATURES AND DATA TYPES")
+    print("-" * 70)
+    print(df.dtypes)
+
+    categorical_columns = df.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
+
+    numerical_columns = df.select_dtypes(
+        include=[np.number]
+    ).columns.tolist()
+
+    print("\nCategorical Features:")
+    print(categorical_columns)
+
+    print("\nNumerical Features:")
+    print(numerical_columns)
+
+    print("\n" + "-" * 70)
+    print("DATA QUALITY")
+    print("-" * 70)
+
+    missing_values = df.isnull().sum()
+
+    if missing_values.sum() > 0:
+        print("Missing values:")
+        print(missing_values[missing_values > 0])
+    else:
+        print("No missing values found.")
+
+    duplicate_count = df.duplicated().sum()
+    print(f"Duplicate records: {duplicate_count}")
+
+    print("\n" + "-" * 70)
+    print("SUMMARY STATISTICS")
+    print("-" * 70)
+    print(df[numerical_columns].describe())
+
+    # Target analysis
+    print("\n" + "-" * 70)
+    print("STREAM COUNT TARGET ANALYSIS")
+    print("-" * 70)
+
+    print("\nRaw Stream Count:")
+    print(df["stream_count"].describe())
+
+    print("\nLog Stream Count:")
+    print(df["log_stream_count"].describe())
+
+    expected_log_stream_count = np.log1p(
+        df["stream_count"]
+    )
+
+    transformation_error = (
+        expected_log_stream_count
+        - df["log_stream_count"]
+    ).abs()
+
+    max_error = transformation_error.max()
+
+    print("\nLog Transformation Validation")
+    print(f"Maximum error: {max_error:.10f}")
+
+    if max_error <= 1e-6:
+        print("Transformation validated: log1p(stream_count).")
+    else:
+        print(
+            "Warning: log_stream_count does not match "
+            "log1p(stream_count)."
+        )
+
+    # Raw stream count distribution
+    plt.figure(figsize=(9, 5))
+
+    sns.histplot(
+        data=df,
+        x="stream_count",
+        bins=50,
+        kde=True,
+    )
+
+    plt.title("Distribution of Raw Stream Count")
+    plt.xlabel("Stream Count")
+    plt.ylabel("Frequency")
+
+    save_figure("stream_count_distribution.png")
+
+    # Log stream count distribution
+    plt.figure(figsize=(9, 5))
+
+    sns.histplot(
+        data=df,
+        x="log_stream_count",
+        bins=50,
+        kde=True,
+    )
+
+    plt.title("Distribution of Log Stream Count")
+    plt.xlabel("log1p(Stream Count)")
+    plt.ylabel("Frequency")
+
+    save_figure("log_stream_count_distribution.png")
+
+    # Raw vs log
+    plt.figure(figsize=(9, 6))
+
+    sns.scatterplot(
+        data=df,
+        x="stream_count",
+        y="log_stream_count",
+        alpha=0.6,
+    )
+
+    plt.title("Raw Stream Count vs Log Stream Count")
+    plt.xlabel("Stream Count")
+    plt.ylabel("log1p(Stream Count)")
+
+    save_figure("stream_count_vs_log_stream_count.png")
+
+    # Regression features
+    regression_features = [
+        "duration_ms",
+        "danceability",
+        "energy",
+        "key",
+        "loudness",
+        "mode",
+        "speechiness",
+        "acousticness",
+        "instrumentalness",
+        "liveness",
+        "valence",
+        "tempo",
+        "time_signature",
+        "year",
+    ]
+
+    available_features = [
+        column
+        for column in regression_features
+        if column in df.columns
+    ]
+
+    correlation_data = df[
+        available_features + ["log_stream_count"]
+    ]
+
+    correlation_matrix = correlation_data.corr()
+
+    target_correlations = (
+        correlation_matrix["log_stream_count"]
+        .drop("log_stream_count")
+        .sort_values(
+            key=lambda values: values.abs(),
+            ascending=False,
+        )
+    )
+
+    print("\n" + "-" * 70)
+    print("CORRELATION WITH LOG STREAM COUNT")
+    print("-" * 70)
+    print(target_correlations)
+
+    # Regression heatmap
+    plt.figure(figsize=(13, 10))
+
+    sns.heatmap(
+        correlation_matrix,
+        annot=True,
+        cmap="coolwarm",
+        fmt=".2f",
+        linewidths=0.5,
+    )
+
+    plt.title(
+        "Regression Features and Log Stream Count "
+        "Correlation Matrix"
+    )
+
+    save_figure("regression_correlation_heatmap.png")
+
+    # Top correlated features
+    print("\n" + "-" * 70)
+    print("FEATURE RELATIONSHIPS WITH LOG STREAM COUNT")
+    print("-" * 70)
+
+    top_features = (
+        target_correlations.abs()
+        .sort_values(ascending=False)
+        .head(5)
+        .index
+    )
+
+    print("Top correlated features:")
+    print(list(top_features))
+
+    for feature in top_features:
+        plt.figure(figsize=(8, 6))
+
+        sns.scatterplot(
+            data=df,
+            x=feature,
+            y="log_stream_count",
+            alpha=0.6,
+        )
+
+        plt.title(
+            f"{feature} vs Log Stream Count"
+        )
+        plt.xlabel(feature)
+        plt.ylabel("log1p(Stream Count)")
+
+        save_figure(
+            f"{feature}_vs_log_stream_count.png"
+        )
+
+    # Outlier analysis
+    print("\n" + "-" * 70)
+    print("REGRESSION OUTLIER ANALYSIS — IQR METHOD")
+    print("-" * 70)
+
+    outlier_columns = (
+        available_features
+        + [
+            "stream_count",
+            "log_stream_count",
         ]
     )
 
-    if len(feature_columns) > 0:
-
-        for column in feature_columns:
-
-            Q1 = (
-                classification_features[
-                    column
-                ].quantile(0.25)
-            )
-
-            Q3 = (
-                classification_features[
-                    column
-                ].quantile(0.75)
-            )
-
-            IQR = Q3 - Q1
-
-            lower_bound = (
-                Q1 - 1.5 * IQR
-            )
-
-            upper_bound = (
-                Q3 + 1.5 * IQR
-            )
-
-            outlier_count = (
-                (
-                    classification_features[
-                        column
-                    ] < lower_bound
-                )
-                |
-                (
-                    classification_features[
-                        column
-                    ] > upper_bound
-                )
-            ).sum()
-
-            print(
-                f"{column}: "
-                f"{outlier_count} outliers"
-            )
-
-    else:
-
-        print(
-            "No numerical feature columns "
-            "available for outlier analysis."
-        )
-
-    print(
-        "\nClassification dataset EDA "
-        "completed successfully."
+    outlier_report = calculate_iqr_outliers(
+        df,
+        outlier_columns,
     )
 
+    for _, row in outlier_report.iterrows():
+        print(
+            f"{row['feature']}: "
+            f"{row['outlier_count']} outliers"
+        )
 
-# ============================================================
-# MAIN PROGRAM
-# ============================================================
+    outlier_report_path = (
+        FIGURES_PATH / "regression_outlier_report.csv"
+    )
+
+    outlier_report.to_csv(
+        outlier_report_path,
+        index=False,
+    )
+
+    print(f"Saved: {outlier_report_path}")
+
+    # Regression boxplot
+    plt.figure(figsize=(14, 9))
+
+    sns.boxplot(
+        data=df[
+            available_features
+            + ["log_stream_count"]
+        ],
+        orient="h",
+    )
+
+    plt.title("Regression Feature Outlier Analysis")
+
+    save_figure("regression_outliers_boxplot.png")
+
+
+# -------------------------------------------------------------------
+# Main execution
+# -------------------------------------------------------------------
+
+def main():
+    """
+    Execute all available exploratory analyses.
+    """
+    analyze_playlist_dataset()
+    analyze_classification_dataset()
+    analyze_regression_dataset()
+
 
 if __name__ == "__main__":
-
-    print("\n" + "#" * 60)
-    print("PLAYLIST_PULSE — LAB 3 EDA PIPELINE")
-    print("#" * 60)
-
     try:
-
-        # Analyze original playlist dataset
-        analyze_playlist_dataset()
-
-        # Analyze classification dataset
-        analyze_classification_dataset()
-
-        print("\n" + "#" * 60)
-        print("EDA EXECUTION COMPLETE")
-        print("#" * 60)
-
-        print(
-            "\nAll visualizations are stored in:"
-        )
-
-        print(
-            "reports/figures/"
-        )
-
-    except Exception as e:
-
-        print(
-            "\nEDA execution failed:"
-        )
-
-        print(
-            str(e)
-        )
+        main()
+    except Exception as exc:
+        print(f"\nEDA pipeline failed: {exc}")
+        raise
