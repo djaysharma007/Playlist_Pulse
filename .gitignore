@@ -5,3 +5,6 @@ __pycache__/
 mlruns/
 outputs/
 .env
+# Generated ML artifacts
+mlflow.db
+reports/figures/
