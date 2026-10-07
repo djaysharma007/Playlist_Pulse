@@ -19,6 +19,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 from ingest import (
     load_and_validate_data,
+    load_and_validate_classification_data,
     load_and_validate_regression_data,
 )
 
@@ -287,7 +288,8 @@ def analyze_playlist_dataset():
 
 def analyze_classification_dataset():
     """
-    Perform exploratory analysis on the classification dataset.
+    Perform exploratory analysis on the PlaylistPulse
+    skip-within-30-seconds classification dataset.
     """
     print("\n" + "=" * 70)
     print("CLASSIFICATION DATASET — EXPLORATORY DATA ANALYSIS")
@@ -300,8 +302,8 @@ def analyze_classification_dataset():
         )
         return
 
-    classification_df = pd.read_csv(
-        CLASSIFICATION_DATA_PATH
+    classification_df = load_and_validate_classification_data(
+        str(CLASSIFICATION_DATA_PATH)
     )
 
     print("\n" + "-" * 70)
@@ -336,16 +338,27 @@ def analyze_classification_dataset():
     print("\n" + "-" * 70)
     print("SUMMARY STATISTICS")
     print("-" * 70)
-    print(classification_df.describe())
 
-    target_column = "y"
+    numerical_columns = classification_df.select_dtypes(
+        include=[np.number]
+    ).columns.tolist()
+
+    print(classification_df[numerical_columns].describe())
+
+    # ---------------------------------------------------------------
+    # Target analysis
+    # ---------------------------------------------------------------
+
+    target_column = "skip_within_30s"
 
     print("\n" + "-" * 70)
     print("TARGET DISTRIBUTION")
     print("-" * 70)
 
     if target_column not in classification_df.columns:
-        print("Target column 'y' not found.")
+        print(
+            f"Target column '{target_column}' not found."
+        )
         return
 
     class_counts = (
@@ -387,21 +400,299 @@ def analyze_classification_dataset():
         x=target_column,
     )
 
-    plt.title("Classification Target Distribution")
-    plt.xlabel("Class")
+    plt.title("Skip Within 30 Seconds — Target Distribution")
+    plt.xlabel("Skip Within 30 Seconds")
     plt.ylabel("Number of Samples")
 
     save_figure("classification_target_distribution.png")
 
-    # Correlation analysis
+    # ---------------------------------------------------------------
+    # Genre distribution
+    # ---------------------------------------------------------------
+
+    if "genre" in classification_df.columns:
+        print("\n" + "-" * 70)
+        print("CLASSIFICATION GENRE DISTRIBUTION")
+        print("-" * 70)
+
+        genre_counts = classification_df["genre"].value_counts()
+
+        print(genre_counts)
+
+        plt.figure(figsize=(12, 6))
+
+        sns.countplot(
+            data=classification_df,
+            x="genre",
+            order=genre_counts.index,
+        )
+
+        plt.title("Classification Dataset Genre Distribution")
+        plt.xlabel("Genre")
+        plt.ylabel("Number of Samples")
+        plt.xticks(rotation=45, ha="right")
+
+        save_figure("classification_genre_distribution.png")
+
+    # ---------------------------------------------------------------
+    # Skip rate by genre
+    # ---------------------------------------------------------------
+
+    if {"genre", target_column}.issubset(classification_df.columns):
+        genre_skip_rate = (
+            classification_df
+            .groupby("genre")[target_column]
+            .mean()
+            .sort_values(ascending=False)
+            .mul(100)
+        )
+
+        print("\n" + "-" * 70)
+        print("SKIP-WITHIN-30S RATE BY GENRE")
+        print("-" * 70)
+
+        print(genre_skip_rate)
+
+        plt.figure(figsize=(12, 6))
+
+        genre_skip_rate.plot(
+            kind="bar",
+        )
+
+        plt.title("Skip Within 30 Seconds Rate by Genre")
+        plt.xlabel("Genre")
+        plt.ylabel("Skip Rate (%)")
+        plt.xticks(rotation=45, ha="right")
+
+        save_figure("skip_rate_by_genre.png")
+
+    # ---------------------------------------------------------------
+    # Skip rate by session position
+    # ---------------------------------------------------------------
+
+    if {
+        "session_position",
+        target_column,
+    }.issubset(classification_df.columns):
+
+        session_skip_rate = (
+            classification_df
+            .groupby("session_position")[target_column]
+            .mean()
+            .mul(100)
+        )
+
+        print("\n" + "-" * 70)
+        print("SKIP RATE BY SESSION POSITION")
+        print("-" * 70)
+
+        print(session_skip_rate)
+
+        plt.figure(figsize=(10, 6))
+
+        sns.lineplot(
+            x=session_skip_rate.index,
+            y=session_skip_rate.values,
+            marker="o",
+        )
+
+        plt.title("Skip Within 30 Seconds by Session Position")
+        plt.xlabel("Session Position")
+        plt.ylabel("Skip Rate (%)")
+
+        save_figure("skip_rate_by_session_position.png")
+
+    # ---------------------------------------------------------------
+    # Time-based analysis
+    # ---------------------------------------------------------------
+
+    if "hour" in classification_df.columns:
+        hourly_skip_rate = (
+            classification_df
+            .groupby("hour")[target_column]
+            .mean()
+            .mul(100)
+        )
+
+        print("\n" + "-" * 70)
+        print("SKIP RATE BY HOUR")
+        print("-" * 70)
+
+        print(hourly_skip_rate)
+
+        plt.figure(figsize=(10, 6))
+
+        sns.lineplot(
+            x=hourly_skip_rate.index,
+            y=hourly_skip_rate.values,
+            marker="o",
+        )
+
+        plt.title("Skip Within 30 Seconds by Hour")
+        plt.xlabel("Hour of Day")
+        plt.ylabel("Skip Rate (%)")
+
+        save_figure("skip_rate_by_hour.png")
+
+    # ---------------------------------------------------------------
+    # Audio feature distributions
+    # ---------------------------------------------------------------
+
+    audio_features = [
+        "danceability",
+        "energy",
+        "loudness",
+        "speechiness",
+        "acousticness",
+        "instrumentalness",
+        "liveness",
+        "valence",
+        "tempo",
+    ]
+
+    available_audio_features = [
+        column
+        for column in audio_features
+        if column in classification_df.columns
+    ]
+
+    print("\n" + "-" * 70)
+    print("AUDIO FEATURE ANALYSIS")
+    print("-" * 70)
+
+    for column in available_audio_features:
+        print(f"\n{column}:")
+        print(classification_df[column].describe())
+
+        plt.figure(figsize=(8, 5))
+
+        sns.histplot(
+            data=classification_df,
+            x=column,
+            kde=True,
+        )
+
+        plt.title(f"Distribution of {column}")
+        plt.xlabel(column)
+        plt.ylabel("Frequency")
+
+        save_figure(
+            f"classification_distribution_{column}.png"
+        )
+
+    # ---------------------------------------------------------------
+    # Audio features vs target
+    # ---------------------------------------------------------------
+
+    if available_audio_features:
+        audio_target_data = classification_df[
+            available_audio_features + [target_column]
+        ].copy()
+
+        audio_target_correlation = (
+            audio_target_data.corr()[target_column]
+            .drop(target_column)
+            .sort_values(
+                key=lambda values: values.abs(),
+                ascending=False,
+            )
+        )
+
+        print("\n" + "-" * 70)
+        print("AUDIO FEATURE CORRELATION WITH TARGET")
+        print("-" * 70)
+
+        print(audio_target_correlation)
+
+        plt.figure(figsize=(10, 7))
+
+        sns.barplot(
+            x=audio_target_correlation.values,
+            y=audio_target_correlation.index,
+        )
+
+        plt.title(
+            "Audio Feature Correlation with Skip Within 30 Seconds"
+        )
+        plt.xlabel("Correlation")
+        plt.ylabel("Audio Feature")
+
+        save_figure(
+            "classification_audio_target_correlation.png"
+        )
+
+    # ---------------------------------------------------------------
+    # History feature analysis
+    # ---------------------------------------------------------------
+
+    history_features = [
+        "user_play_count",
+        "user_skip_rate",
+        "track_play_count",
+        "track_skip_rate",
+    ]
+
+    available_history_features = [
+        column
+        for column in history_features
+        if column in classification_df.columns
+    ]
+
+    if available_history_features:
+        print("\n" + "-" * 70)
+        print("USER AND TRACK HISTORY FEATURES")
+        print("-" * 70)
+
+        print(
+            classification_df[
+                available_history_features
+            ].describe()
+        )
+
+        for column in available_history_features:
+            plt.figure(figsize=(8, 5))
+
+            sns.histplot(
+                data=classification_df,
+                x=column,
+                kde=True,
+            )
+
+            plt.title(f"Distribution of {column}")
+            plt.xlabel(column)
+            plt.ylabel("Frequency")
+
+            save_figure(
+                f"classification_history_{column}.png"
+            )
+
+    # ---------------------------------------------------------------
+    # Classification numerical correlation
+    # ---------------------------------------------------------------
+
     classification_numeric = classification_df.select_dtypes(
         include=[np.number]
     )
 
-    if len(classification_numeric.columns) > 1:
-        plt.figure(figsize=(8, 6))
+    # Exclude post-playback fields if they exist.
+    post_playback_columns = [
+        "skipped",
+        "skip_time_ms",
+        "duration_played_ms",
+    ]
 
-        correlation_matrix = classification_numeric.corr()
+    correlation_columns = [
+        column
+        for column in classification_numeric.columns
+        if column not in post_playback_columns
+    ]
+
+    if len(correlation_columns) > 1:
+        plt.figure(figsize=(13, 10))
+
+        correlation_matrix = classification_df[
+            correlation_columns
+        ].corr()
 
         sns.heatmap(
             correlation_matrix,
@@ -411,20 +702,25 @@ def analyze_classification_dataset():
             linewidths=0.5,
         )
 
-        plt.title("Classification Dataset Correlation Matrix")
+        plt.title(
+            "Classification Feature Correlation Matrix"
+        )
 
         save_figure(
             "classification_correlation_heatmap.png"
         )
 
+    # ---------------------------------------------------------------
     # Outlier analysis
+    # ---------------------------------------------------------------
+
     print("\n" + "-" * 70)
     print("CLASSIFICATION FEATURE OUTLIERS")
     print("-" * 70)
 
     feature_columns = [
         column
-        for column in classification_numeric.columns
+        for column in correlation_columns
         if column != target_column
     ]
 
@@ -439,11 +735,60 @@ def analyze_classification_dataset():
                 f"{row['feature']}: "
                 f"{row['outlier_count']} outliers"
             )
-    else:
-        print(
-            "No numerical feature columns available "
-            "for outlier analysis."
+
+        outlier_report_path = (
+            FIGURES_PATH
+            / "classification_outlier_report.csv"
         )
+
+        outlier_report.to_csv(
+            outlier_report_path,
+            index=False,
+        )
+
+        print(
+            f"Saved: {outlier_report_path}"
+        )
+
+        # Boxplot only for meaningful continuous/numerical
+        # classification features.
+        boxplot_features = [
+            column
+            for column in [
+                "duration_ms",
+                "danceability",
+                "energy",
+                "loudness",
+                "speechiness",
+                "acousticness",
+                "instrumentalness",
+                "liveness",
+                "valence",
+                "tempo",
+                "user_play_count",
+                "user_skip_rate",
+                "track_play_count",
+                "track_skip_rate",
+                "session_position",
+            ]
+            if column in classification_df.columns
+        ]
+
+        if boxplot_features:
+            plt.figure(figsize=(14, 10))
+
+            sns.boxplot(
+                data=classification_df[boxplot_features],
+                orient="h",
+            )
+
+            plt.title(
+                "Classification Numerical Feature Outlier Analysis"
+            )
+
+            save_figure(
+                "classification_outliers_boxplot.png"
+            )
 
 
 # -------------------------------------------------------------------
@@ -455,8 +800,10 @@ def analyze_regression_dataset():
     Perform exploratory analysis on the stream-count regression dataset.
     """
     print("\n" + "=" * 70)
-    print("STREAM COUNT REGRESSION DATASET — "
-          "EXPLORATORY DATA ANALYSIS")
+    print(
+        "STREAM COUNT REGRESSION DATASET — "
+        "EXPLORATORY DATA ANALYSIS"
+    )
     print("=" * 70)
 
     df = load_and_validate_regression_data(
@@ -534,7 +881,9 @@ def analyze_regression_dataset():
     print(f"Maximum error: {max_error:.10f}")
 
     if max_error <= 1e-6:
-        print("Transformation validated: log1p(stream_count).")
+        print(
+            "Transformation validated: log1p(stream_count)."
+        )
     else:
         print(
             "Warning: log_stream_count does not match "
@@ -583,11 +932,15 @@ def analyze_regression_dataset():
         alpha=0.6,
     )
 
-    plt.title("Raw Stream Count vs Log Stream Count")
+    plt.title(
+        "Raw Stream Count vs Log Stream Count"
+    )
     plt.xlabel("Stream Count")
     plt.ylabel("log1p(Stream Count)")
 
-    save_figure("stream_count_vs_log_stream_count.png")
+    save_figure(
+        "stream_count_vs_log_stream_count.png"
+    )
 
     # Regression features
     regression_features = [
@@ -649,7 +1002,9 @@ def analyze_regression_dataset():
         "Correlation Matrix"
     )
 
-    save_figure("regression_correlation_heatmap.png")
+    save_figure(
+        "regression_correlation_heatmap.png"
+    )
 
     # Top correlated features
     print("\n" + "-" * 70)
@@ -711,7 +1066,8 @@ def analyze_regression_dataset():
         )
 
     outlier_report_path = (
-        FIGURES_PATH / "regression_outlier_report.csv"
+        FIGURES_PATH
+        / "regression_outlier_report.csv"
     )
 
     outlier_report.to_csv(
@@ -732,9 +1088,13 @@ def analyze_regression_dataset():
         orient="h",
     )
 
-    plt.title("Regression Feature Outlier Analysis")
+    plt.title(
+        "Regression Feature Outlier Analysis"
+    )
 
-    save_figure("regression_outliers_boxplot.png")
+    save_figure(
+        "regression_outliers_boxplot.png"
+    )
 
 
 # -------------------------------------------------------------------

@@ -1,8 +1,10 @@
 from pathlib import Path
+
 import warnings
 
 import mlflow
 import mlflow.xgboost
+
 import numpy as np
 import pandas as pd
 import shap
@@ -36,22 +38,48 @@ DATA_PATH = (
     / "classification.csv"
 )
 
+
 CATEGORICAL_FEATURES = [
     "userId",
     "itemId",
+    "artist",
+    "genre",
 ]
 
+
 NUMERICAL_FEATURES = [
-    "timestamp",
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature",
+    "user_play_count",
+    "user_skip_rate",
+    "track_play_count",
+    "track_skip_rate",
+    "session_position",
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
 ]
+
 
 FEATURES = CATEGORICAL_FEATURES + NUMERICAL_FEATURES
 
-TARGET = "y"
+TARGET = "skip_within_30s"
 
 
 def load_data():
-    """Load and validate the classification dataset."""
+    """Load, validate, and prepare the classification dataset."""
 
     if not DATA_PATH.exists():
         raise FileNotFoundError(
@@ -60,7 +88,11 @@ def load_data():
 
     data = pd.read_csv(DATA_PATH)
 
-    required_columns = FEATURES + [TARGET]
+    required_columns = (
+        FEATURES
+        + [TARGET]
+        + ["timestamp"]
+    )
 
     missing_columns = [
         column
@@ -73,14 +105,77 @@ def load_data():
             f"Missing required columns: {missing_columns}"
         )
 
+    data = data.copy()
+
+    # --------------------------------------------------------------
+    # Timestamp feature engineering
+    # --------------------------------------------------------------
+
+    data["timestamp"] = pd.to_datetime(
+        data["timestamp"],
+        errors="coerce",
+    )
+
+    if data["timestamp"].isna().any():
+        raise ValueError(
+            "Invalid timestamp values found in classification dataset."
+        )
+
+    data["hour"] = data["timestamp"].dt.hour
+
+    data["day_of_week"] = (
+        data["timestamp"].dt.dayofweek
+    )
+
+    data["month"] = (
+        data["timestamp"].dt.month
+    )
+
+    data["is_weekend"] = (
+        data["day_of_week"] >= 5
+    ).astype(int)
+
+    # Timestamp itself is no longer required after feature extraction.
+    data = data.drop(
+        columns=["timestamp"]
+    )
+
+    # --------------------------------------------------------------
+    # Remove post-event / target-derived columns
+    # --------------------------------------------------------------
+
+    leakage_columns = [
+        "skipped",
+        "skip_time_ms",
+        "duration_played_ms",
+    ]
+
+    data = data.drop(
+        columns=[
+            column
+            for column in leakage_columns
+            if column in data.columns
+        ]
+    )
+
+    # --------------------------------------------------------------
+    # Validate required modelling columns
+    # --------------------------------------------------------------
+
+    required_model_columns = FEATURES + [TARGET]
+
     data = data.dropna(
-        subset=required_columns
+        subset=required_model_columns
     ).copy()
 
     if data.empty:
         raise ValueError(
             "No valid samples remain after removing missing values."
         )
+
+    # --------------------------------------------------------------
+    # Validate binary target
+    # --------------------------------------------------------------
 
     unique_targets = sorted(
         data[TARGET].unique().tolist()
@@ -206,6 +301,7 @@ def main():
     data = load_data()
 
     X = data[FEATURES]
+
     y = data[TARGET]
 
     print(
@@ -213,6 +309,7 @@ def main():
     )
 
     print("\nClass distribution:")
+
     print(
         y.value_counts()
         .sort_index()
@@ -313,6 +410,7 @@ def main():
     # ------------------------------------------------------------------
 
     configurations = [
+
         {
             "n_estimators": 500,
             "max_depth": 3,
@@ -321,6 +419,7 @@ def main():
             "colsample_bytree": 0.8,
             "min_child_weight": 1,
         },
+
         {
             "n_estimators": 700,
             "max_depth": 3,
@@ -329,6 +428,7 @@ def main():
             "colsample_bytree": 0.8,
             "min_child_weight": 1,
         },
+
         {
             "n_estimators": 500,
             "max_depth": 5,
@@ -337,6 +437,7 @@ def main():
             "colsample_bytree": 0.8,
             "min_child_weight": 1,
         },
+
         {
             "n_estimators": 700,
             "max_depth": 5,
@@ -345,6 +446,7 @@ def main():
             "colsample_bytree": 0.8,
             "min_child_weight": 1,
         },
+
         {
             "n_estimators": 500,
             "max_depth": 7,
@@ -353,6 +455,7 @@ def main():
             "colsample_bytree": 0.8,
             "min_child_weight": 1,
         },
+
         {
             "n_estimators": 700,
             "max_depth": 7,
@@ -399,24 +502,24 @@ def main():
         validation_results.append(
             {
                 **params,
-                "validation_accuracy": metrics[
-                    "accuracy"
-                ],
-                "validation_precision": metrics[
-                    "precision"
-                ],
-                "validation_recall": metrics[
-                    "recall"
-                ],
-                "validation_f1": metrics[
-                    "f1"
-                ],
-                "validation_roc_auc": metrics[
-                    "roc_auc"
-                ],
-                "best_iteration": int(
-                    best_iteration
-                ),
+
+                "validation_accuracy":
+                    metrics["accuracy"],
+
+                "validation_precision":
+                    metrics["precision"],
+
+                "validation_recall":
+                    metrics["recall"],
+
+                "validation_f1":
+                    metrics["f1"],
+
+                "validation_roc_auc":
+                    metrics["roc_auc"],
+
+                "best_iteration":
+                    int(best_iteration),
             }
         )
 
@@ -461,26 +564,31 @@ def main():
                 "n_estimators"
             ]
         ),
+
         "max_depth": int(
             best_configuration[
                 "max_depth"
             ]
         ),
+
         "learning_rate": float(
             best_configuration[
                 "learning_rate"
             ]
         ),
+
         "subsample": float(
             best_configuration[
                 "subsample"
             ]
         ),
+
         "colsample_bytree": float(
             best_configuration[
                 "colsample_bytree"
             ]
         ),
+
         "min_child_weight": int(
             best_configuration[
                 "min_child_weight"
@@ -493,6 +601,7 @@ def main():
     )
 
     for parameter, value in best_params.items():
+
         print(
             f"{parameter}: {value}"
         )
@@ -514,9 +623,6 @@ def main():
 
     # ------------------------------------------------------------------
     # Final XGBoost model
-    #
-    # The validation split remains available for early stopping.
-    # The test set remains untouched until final evaluation.
     # ------------------------------------------------------------------
 
     print(
@@ -615,22 +721,27 @@ def main():
                 "Logistic Regression",
                 "XGBoost",
             ],
+
             "Accuracy": [
                 logistic_metrics["accuracy"],
                 xgb_metrics["accuracy"],
             ],
+
             "Precision": [
                 logistic_metrics["precision"],
                 xgb_metrics["precision"],
             ],
+
             "Recall": [
                 logistic_metrics["recall"],
                 xgb_metrics["recall"],
             ],
+
             "F1": [
                 logistic_metrics["f1"],
                 xgb_metrics["f1"],
             ],
+
             "ROC_AUC": [
                 logistic_metrics["roc_auc"],
                 xgb_metrics["roc_auc"],
@@ -645,9 +756,8 @@ def main():
     print(
         comparison.to_string(
             index=False,
-            float_format=lambda value: (
-                f"{value:.6f}"
-            ),
+            float_format=lambda value:
+                f"{value:.6f}",
         )
     )
 
@@ -686,9 +796,8 @@ def main():
         .head(15)
         .to_string(
             index=False,
-            float_format=lambda value: (
-                f"{value:.6f}"
-            ),
+            float_format=lambda value:
+                f"{value:.6f}",
         )
     )
 
@@ -731,8 +840,6 @@ def main():
         shap_values
     )
 
-    # Handle possible extra dimensions returned
-    # by different SHAP/XGBoost combinations.
     if shap_values_array.ndim == 3:
         shap_values_array = (
             shap_values_array[:, :, 0]
@@ -762,9 +869,8 @@ def main():
         .head(20)
         .to_string(
             index=False,
-            float_format=lambda value: (
-                f"{value:.6f}"
-            ),
+            float_format=lambda value:
+                f"{value:.6f}",
         )
     )
 
@@ -798,6 +904,7 @@ def main():
         )
 
         # Validation metrics
+
         mlflow.log_metric(
             "validation_accuracy",
             float(
@@ -844,6 +951,7 @@ def main():
         )
 
         # Early stopping
+
         mlflow.log_metric(
             "best_iteration",
             float(final_best_iteration),
@@ -857,6 +965,7 @@ def main():
         )
 
         # XGBoost test metrics
+
         mlflow.log_metric(
             "xgboost_test_accuracy",
             xgb_metrics["accuracy"],
@@ -883,6 +992,7 @@ def main():
         )
 
         # Logistic comparison
+
         mlflow.log_metric(
             "logistic_test_f1",
             logistic_metrics["f1"],
@@ -894,6 +1004,7 @@ def main():
         )
 
         # SHAP importance
+
         for _, row in (
             shap_importance_df
             .head(20)

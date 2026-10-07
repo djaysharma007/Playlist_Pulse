@@ -6,35 +6,19 @@ Purpose:
     cross-validation and select the regularization strength using
     the one-standard-error rule.
 
-Input:
-    src/data/classification.csv
-
-Features:
-    userId
-    itemId
-    timestamp
-
-Target:
-    y
+Prediction:
+    Predict whether a user will skip a track within 30 seconds.
 
 Evaluation:
-    Accuracy
-    Precision
-    Recall
-    F1
-    ROC-AUC
+    Accuracy, Precision, Recall, F1, ROC-AUC.
 
 Model selection:
     Logistic Regression with different C values.
 
 One-standard-error rule:
-    For Logistic Regression, a smaller C applies stronger regularization
-    and is treated as the simpler model. Among candidates within one
-    standard error of the best CV score, the smallest C is selected.
-
-Important:
-    The semantic meaning of y is intentionally not assumed by this
-    pipeline. It is treated only as a binary classification target.
+    Smaller C means stronger regularization and a simpler model.
+    Among candidates within one standard error of the best CV F1,
+    the smallest C is selected.
 """
 
 from pathlib import Path
@@ -87,16 +71,42 @@ C_VALUES = [
     100.0,
 ]
 
+
+# Categorical features
 CATEGORICAL_FEATURES = [
     "userId",
     "itemId",
+    "artist",
+    "genre",
 ]
 
+# Numerical features available before playback
 NUMERICAL_FEATURES = [
-    "timestamp",
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature",
+    "user_play_count",
+    "user_skip_rate",
+    "track_play_count",
+    "track_skip_rate",
+    "session_position",
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
 ]
 
-TARGET_COLUMN = "y"
+TARGET_COLUMN = "skip_within_30s"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +114,7 @@ TARGET_COLUMN = "y"
 # ---------------------------------------------------------------------------
 
 def load_data():
-    """Load and validate the classification dataset."""
+    """Load and validate the PlaylistPulse classification dataset."""
 
     if not DATA_PATH.exists():
         raise FileNotFoundError(
@@ -114,6 +124,28 @@ def load_data():
     print(f"Loading classification data from:\n{DATA_PATH}")
 
     data = pd.read_csv(DATA_PATH)
+
+    # -----------------------------------------------------------------------
+    # Create time-based features
+    # -----------------------------------------------------------------------
+
+    if "timestamp" not in data.columns:
+        raise ValueError("Missing required column: timestamp")
+
+    data["timestamp"] = pd.to_datetime(
+        data["timestamp"],
+        errors="coerce",
+    )
+
+    data["hour"] = data["timestamp"].dt.hour
+    data["day_of_week"] = data["timestamp"].dt.dayofweek
+    data["month"] = data["timestamp"].dt.month
+    data["is_weekend"] = (
+        data["day_of_week"] >= 5
+    ).astype(int)
+
+    # Timestamp itself is not used as a model feature.
+    data = data.drop(columns=["timestamp"])
 
     required_columns = (
         CATEGORICAL_FEATURES
@@ -132,6 +164,7 @@ def load_data():
             f"Missing required columns: {missing_columns}"
         )
 
+    # Remove rows with missing model inputs.
     data = data.dropna(
         subset=required_columns
     ).reset_index(drop=True)
@@ -142,19 +175,20 @@ def load_data():
 
     if not target_values.issubset({0, 1}):
         raise ValueError(
-            f"Target y must be binary with values 0 and 1. "
+            f"Target {TARGET_COLUMN} must contain only 0 and 1. "
             f"Found: {sorted(target_values)}"
         )
 
     if data[TARGET_COLUMN].nunique() != 2:
         raise ValueError(
-            "Target y must contain both classes."
+            f"Target {TARGET_COLUMN} must contain both classes."
         )
 
     print(f"Samples loaded: {len(data)}")
     print(
-        f"Class distribution:\n"
-        f"{data[TARGET_COLUMN].value_counts().sort_index()}"
+        f"Target distribution: "
+        f"No Skip = {(data[TARGET_COLUMN] == 0).sum()}, "
+        f"Skip = {(data[TARGET_COLUMN] == 1).sum()}"
     )
 
     return data
@@ -165,7 +199,7 @@ def load_data():
 # ---------------------------------------------------------------------------
 
 def build_preprocessor():
-    """Build the leakage-safe preprocessing pipeline."""
+    """Build the preprocessing pipeline."""
 
     return ColumnTransformer(
         transformers=[
@@ -190,7 +224,7 @@ def build_preprocessor():
 # ---------------------------------------------------------------------------
 
 def build_model(C):
-    """Create the preprocessing and Logistic Regression pipeline."""
+    """Create preprocessing + Logistic Regression pipeline."""
 
     return Pipeline(
         steps=[
@@ -237,24 +271,31 @@ def run_cross_validation(model, X, y, cv):
         "Accuracy_mean": scores[
             "test_accuracy"
         ].mean(),
+
         "Accuracy_std": scores[
             "test_accuracy"
         ].std(ddof=1),
+
         "Precision_mean": scores[
             "test_precision"
         ].mean(),
+
         "Recall_mean": scores[
             "test_recall"
         ].mean(),
+
         "F1_mean": scores[
             "test_f1"
         ].mean(),
+
         "F1_std": scores[
             "test_f1"
         ].std(ddof=1),
+
         "ROC_AUC_mean": scores[
             "test_roc_auc"
         ].mean(),
+
         "ROC_AUC_std": scores[
             "test_roc_auc"
         ].std(ddof=1),
@@ -303,8 +344,8 @@ def select_one_standard_error(results):
 
     Higher F1 is better.
 
-    Smaller C means stronger regularization and therefore a simpler
-    model. Among acceptable candidates, the smallest C is selected.
+    Smaller C means stronger regularization and therefore
+    a simpler model.
     """
 
     best_index = results[
@@ -389,21 +430,25 @@ def evaluate_test_set(
             y_test,
             predictions,
         ),
+
         "Precision": precision_score(
             y_test,
             predictions,
             zero_division=0,
         ),
+
         "Recall": recall_score(
             y_test,
             predictions,
             zero_division=0,
         ),
+
         "F1": f1_score(
             y_test,
             predictions,
             zero_division=0,
         ),
+
         "ROC_AUC": roc_auc_score(
             y_test,
             probabilities,
@@ -420,7 +465,6 @@ def main():
     print("=" * 60)
     print("PlaylistPulse - Cross-Validated Logistic Classification")
     print("=" * 60)
-    print()
 
     # -----------------------------------------------------------------------
     # Load data
@@ -439,23 +483,19 @@ def main():
     # Hold out test set
     # -----------------------------------------------------------------------
 
-    X_development, X_test, y_development, y_test = train_test_split(
-        X,
-        y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
-        stratify=y,
-    )
-
-    print()
-    print(
-        f"Development samples: "
-        f"{len(X_development)}"
+    X_development, X_test, y_development, y_test = (
+        train_test_split(
+            X,
+            y,
+            test_size=TEST_SIZE,
+            random_state=RANDOM_STATE,
+            stratify=y,
+        )
     )
 
     print(
-        f"Testing samples: "
-        f"{len(X_test)}"
+        f"Split: development={len(X_development)}, "
+        f"test={len(X_test)}"
     )
 
     # -----------------------------------------------------------------------
@@ -472,7 +512,6 @@ def main():
     # Cross-validation search
     # -----------------------------------------------------------------------
 
-    print()
     print(
         "Searching Logistic Regression "
         "regularization strength..."
@@ -492,7 +531,6 @@ def main():
         cv_results["F1_mean"].idxmax()
     ]
 
-    print()
     print(
         f"Best C by CV F1: "
         f"{best_cv['C']}"
@@ -500,7 +538,7 @@ def main():
 
     print(
         f"Best CV F1: "
-        f"{best_cv['F1_mean']:.6f}"
+        f"{best_cv['F1_mean']:.4f}"
     )
 
     # -----------------------------------------------------------------------
@@ -512,26 +550,19 @@ def main():
     )
 
     print(
-        f"One-standard-error selected C: "
+        f"One-SE selected C: "
         f"{selection['selected_C']}"
     )
 
     print(
-        f"One-standard-error threshold: "
-        f"{selection['threshold']:.6f}"
+        f"One-SE threshold: "
+        f"{selection['threshold']:.4f}"
     )
 
     # -----------------------------------------------------------------------
     # Final evaluation
     # -----------------------------------------------------------------------
 
-    print()
-    print(
-        "Evaluating baseline and selected "
-        "models on the test set..."
-    )
-
-    # Honest baseline: C = 1.0
     baseline_model = build_model(
         C=1.0
     )
@@ -544,7 +575,6 @@ def main():
         y_test,
     )
 
-    # Selected model
     selected_model = build_model(
         C=selection["selected_C"]
     )
@@ -560,12 +590,12 @@ def main():
     comparison = pd.DataFrame(
         [
             {
-                "Model": "Logistic Regression Baseline",
+                "Model": "Logistic Baseline",
                 "C": 1.0,
                 **baseline_test,
             },
             {
-                "Model": "Logistic Regression CV Selected",
+                "Model": "Logistic CV Selected",
                 "C": selection[
                     "selected_C"
                 ],
@@ -586,18 +616,13 @@ def main():
     print(
         comparison.to_string(
             index=False,
-            float_format=lambda value: f"{value:.6f}",
+            float_format=lambda value: f"{value:.4f}",
         )
     )
 
-    # -----------------------------------------------------------------------
-    # Cross-validation results
-    # -----------------------------------------------------------------------
-
     print()
-    print("=" * 60)
     print("Cross-Validation Results")
-    print("=" * 60)
+    print("-" * 60)
 
     print(
         cv_results[
@@ -609,7 +634,7 @@ def main():
             ]
         ].to_string(
             index=False,
-            float_format=lambda value: f"{value:.6f}",
+            float_format=lambda value: f"{value:.4f}",
         )
     )
 

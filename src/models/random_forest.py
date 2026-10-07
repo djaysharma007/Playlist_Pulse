@@ -21,10 +21,15 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
 
 warnings.filterwarnings("ignore")
 
+
+# ---------------------------------------------------------------------------
+# Project configuration
+# ---------------------------------------------------------------------------
 
 RANDOM_STATE = 42
 
@@ -35,14 +40,43 @@ DATA_PATH = PROJECT_ROOT / "src" / "data" / "classification.csv"
 CATEGORICAL_FEATURES = [
     "userId",
     "itemId",
+    "artist",
+    "genre",
 ]
+
 
 NUMERICAL_FEATURES = [
-    "timestamp",
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature",
+    "user_play_count",
+    "user_skip_rate",
+    "track_play_count",
+    "track_skip_rate",
+    "session_position",
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
 ]
 
-TARGET = "y"
 
+TARGET = "skip_within_30s"
+
+
+# ---------------------------------------------------------------------------
+# Data loading and validation
+# ---------------------------------------------------------------------------
 
 def load_data():
     """Load and validate the classification dataset."""
@@ -54,6 +88,35 @@ def load_data():
 
     data = pd.read_csv(DATA_PATH)
 
+    # -----------------------------------------------------------------------
+    # Timestamp feature engineering
+    # -----------------------------------------------------------------------
+
+    if "timestamp" not in data.columns:
+        raise ValueError(
+            "Missing required column: timestamp"
+        )
+
+    data["timestamp"] = pd.to_datetime(
+        data["timestamp"],
+        errors="coerce",
+    )
+
+    data["hour"] = data["timestamp"].dt.hour
+    data["day_of_week"] = data["timestamp"].dt.dayofweek
+    data["month"] = data["timestamp"].dt.month
+    data["is_weekend"] = (
+        data["day_of_week"] >= 5
+    ).astype(int)
+
+    data = data.drop(
+        columns=["timestamp"]
+    )
+
+    # -----------------------------------------------------------------------
+    # Validate required columns
+    # -----------------------------------------------------------------------
+
     required_columns = (
         CATEGORICAL_FEATURES
         + NUMERICAL_FEATURES
@@ -61,7 +124,8 @@ def load_data():
     )
 
     missing_columns = [
-        column for column in required_columns
+        column
+        for column in required_columns
         if column not in data.columns
     ]
 
@@ -70,14 +134,26 @@ def load_data():
             f"Missing required columns: {missing_columns}"
         )
 
+    # -----------------------------------------------------------------------
+    # Remove missing model inputs
+    # -----------------------------------------------------------------------
+
     data = data.dropna(
         subset=required_columns
     ).copy()
 
     if data.empty:
-        raise ValueError("No valid samples remain after removing missing values.")
+        raise ValueError(
+            "No valid samples remain after removing missing values."
+        )
 
-    unique_targets = sorted(data[TARGET].unique().tolist())
+    # -----------------------------------------------------------------------
+    # Validate binary target
+    # -----------------------------------------------------------------------
+
+    unique_targets = sorted(
+        data[TARGET].unique().tolist()
+    )
 
     if not set(unique_targets).issubset({0, 1}):
         raise ValueError(
@@ -89,6 +165,10 @@ def load_data():
 
     return data
 
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
 
 def build_preprocessor():
     """Create leakage-safe preprocessing."""
@@ -112,6 +192,10 @@ def build_preprocessor():
         remainder="drop",
     )
 
+
+# ---------------------------------------------------------------------------
+# Random Forest model
+# ---------------------------------------------------------------------------
 
 def build_random_forest(
     n_estimators,
@@ -149,14 +233,22 @@ def build_random_forest(
     )
 
 
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
 def evaluate_model(model, X, y):
     """Calculate classification metrics."""
 
     predictions = model.predict(X)
+
     probabilities = model.predict_proba(X)[:, 1]
 
     return {
-        "accuracy": accuracy_score(y, predictions),
+        "accuracy": accuracy_score(
+            y,
+            predictions,
+        ),
         "precision": precision_score(
             y,
             predictions,
@@ -183,6 +275,10 @@ def evaluate_model(model, X, y):
     }
 
 
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+
 def main():
 
     print("=" * 70)
@@ -196,7 +292,8 @@ def main():
     data = load_data()
 
     X = data[
-        CATEGORICAL_FEATURES + NUMERICAL_FEATURES
+        CATEGORICAL_FEATURES
+        + NUMERICAL_FEATURES
     ]
 
     y = data[TARGET]
@@ -210,29 +307,36 @@ def main():
     # Development / test split
     # ------------------------------------------------------------------
 
-    X_development, X_test, y_development, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        stratify=y,
-        random_state=RANDOM_STATE,
+    X_development, X_test, y_development, y_test = (
+        train_test_split(
+            X,
+            y,
+            test_size=0.20,
+            stratify=y,
+            random_state=RANDOM_STATE,
+        )
     )
 
     # ------------------------------------------------------------------
     # Training / validation split
     # ------------------------------------------------------------------
 
-    X_train, X_validation, y_train, y_validation = train_test_split(
-        X_development,
-        y_development,
-        test_size=0.25,
-        stratify=y_development,
-        random_state=RANDOM_STATE,
+    X_train, X_validation, y_train, y_validation = (
+        train_test_split(
+            X_development,
+            y_development,
+            test_size=0.25,
+            stratify=y_development,
+            random_state=RANDOM_STATE,
+        )
     )
 
-    print(f"\nTraining samples: {len(X_train)}")
-    print(f"Validation samples: {len(X_validation)}")
-    print(f"Testing samples: {len(X_test)}")
+    print(
+        f"\nSplit: "
+        f"train={len(X_train)}, "
+        f"validation={len(X_validation)}, "
+        f"test={len(X_test)}"
+    )
 
     # ------------------------------------------------------------------
     # Hyperparameter search
@@ -267,9 +371,13 @@ def main():
     ]
 
     for n_estimators in n_estimators_values:
+
         for max_depth in max_depth_values:
+
             for min_samples_split in min_samples_split_values:
+
                 for min_samples_leaf in min_samples_leaf_values:
+
                     for max_features in max_features_values:
 
                         configurations.append(
@@ -283,7 +391,8 @@ def main():
                         )
 
     print(
-        f"\nEvaluating {len(configurations)} Random Forest configurations..."
+        f"\nEvaluating {len(configurations)} "
+        "Random Forest configurations..."
     )
 
     validation_results = []
@@ -323,9 +432,14 @@ def main():
             }
         )
 
-        if index % 10 == 0 or index == len(configurations):
+        if (
+            index % 10 == 0
+            or index == len(configurations)
+        ):
             print(
-                f"Evaluated {index}/{len(configurations)} configurations"
+                f"Evaluated "
+                f"{index}/{len(configurations)} "
+                "configurations"
             )
 
     validation_results_df = pd.DataFrame(
@@ -336,52 +450,76 @@ def main():
     # Select best configuration
     # ------------------------------------------------------------------
 
-    validation_results_df = validation_results_df.sort_values(
-        by=[
-            "validation_f1",
-            "validation_roc_auc",
-        ],
-        ascending=[
-            False,
-            False,
-        ],
-    ).reset_index(drop=True)
+    validation_results_df = (
+        validation_results_df.sort_values(
+            by=[
+                "validation_f1",
+                "validation_roc_auc",
+            ],
+            ascending=[
+                False,
+                False,
+            ],
+        )
+        .reset_index(drop=True)
+    )
 
-    best_configuration = validation_results_df.iloc[0]
+    best_configuration = (
+        validation_results_df.iloc[0]
+    )
 
     best_n_estimators = int(
         best_configuration["n_estimators"]
     )
 
-    best_max_depth = best_configuration["max_depth"]
+    best_max_depth = (
+        best_configuration["max_depth"]
+    )
 
     if pd.isna(best_max_depth):
         best_max_depth = None
     else:
-        best_max_depth = int(best_max_depth)
+        best_max_depth = int(
+            best_max_depth
+        )
 
     best_min_samples_split = int(
-        best_configuration["min_samples_split"]
+        best_configuration[
+            "min_samples_split"
+        ]
     )
 
     best_min_samples_leaf = int(
-        best_configuration["min_samples_leaf"]
+        best_configuration[
+            "min_samples_leaf"
+        ]
     )
 
     best_max_features = str(
-        best_configuration["max_features"]
+        best_configuration[
+            "max_features"
+        ]
     )
 
     print("\nBest validation configuration:")
-    print(f"n_estimators: {best_n_estimators}")
-    print(f"max_depth: {best_max_depth}")
     print(
-        f"min_samples_split: {best_min_samples_split}"
+        f"n_estimators: {best_n_estimators}"
     )
     print(
-        f"min_samples_leaf: {best_min_samples_leaf}"
+        f"max_depth: {best_max_depth}"
     )
-    print(f"max_features: {best_max_features}")
+    print(
+        f"min_samples_split: "
+        f"{best_min_samples_split}"
+    )
+    print(
+        f"min_samples_leaf: "
+        f"{best_min_samples_leaf}"
+    )
+    print(
+        f"max_features: "
+        f"{best_max_features}"
+    )
 
     print(
         f"Validation F1: "
@@ -397,7 +535,9 @@ def main():
     # Final Random Forest
     # ------------------------------------------------------------------
 
-    print("\nTraining final Random Forest...")
+    print(
+        "\nTraining final Random Forest..."
+    )
 
     final_random_forest = build_random_forest(
         n_estimators=best_n_estimators,
@@ -427,18 +567,27 @@ def main():
         .named_steps["classifier"]
     )
 
-    oob_score = random_forest_classifier.oob_score_
+    oob_score = (
+        random_forest_classifier.oob_score_
+    )
+
     oob_error = 1.0 - oob_score
 
     print("\nRandom Forest OOB results:")
-    print(f"OOB score: {oob_score:.6f}")
-    print(f"OOB error: {oob_error:.6f}")
+    print(
+        f"OOB score: {oob_score:.6f}"
+    )
+    print(
+        f"OOB error: {oob_error:.6f}"
+    )
 
     # ------------------------------------------------------------------
     # Logistic Regression baseline
     # ------------------------------------------------------------------
 
-    print("\nTraining Logistic Regression baseline...")
+    print(
+        "\nTraining Logistic Regression baseline..."
+    )
 
     logistic_regression = Pipeline(
         steps=[
@@ -472,9 +621,9 @@ def main():
     # Decision Tree comparison
     # ------------------------------------------------------------------
 
-    print("\nTraining Decision Tree comparison model...")
-
-    from sklearn.tree import DecisionTreeClassifier
+    print(
+        "\nTraining Decision Tree comparison model..."
+    )
 
     decision_tree = Pipeline(
         steps=[
@@ -544,7 +693,10 @@ def main():
         }
     )
 
-    print("\nTest-set model comparison:")
+    print(
+        "\nTest-set model comparison:"
+    )
+
     print(
         comparison.to_string(
             index=False,
@@ -552,16 +704,23 @@ def main():
         )
     )
 
-    print("\nRandom Forest confusion matrix:")
     print(
-        random_forest_metrics["confusion_matrix"]
+        "\nRandom Forest confusion matrix:"
+    )
+
+    print(
+        random_forest_metrics[
+            "confusion_matrix"
+        ]
     )
 
     # ------------------------------------------------------------------
     # Permutation importance
     # ------------------------------------------------------------------
 
-    print("\nCalculating permutation feature importance...")
+    print(
+        "\nCalculating permutation feature importance..."
+    )
 
     permutation = permutation_importance(
         final_random_forest,
@@ -573,18 +732,26 @@ def main():
         n_jobs=-1,
     )
 
-    permutation_importance_df = pd.DataFrame(
-        {
-            "feature": X_validation.columns,
-            "importance_mean": permutation.importances_mean,
-            "importance_std": permutation.importances_std,
-        }
-    ).sort_values(
-        by="importance_mean",
-        ascending=False,
+    permutation_importance_df = (
+        pd.DataFrame(
+            {
+                "feature": X_validation.columns,
+                "importance_mean":
+                    permutation.importances_mean,
+                "importance_std":
+                    permutation.importances_std,
+            }
+        )
+        .sort_values(
+            by="importance_mean",
+            ascending=False,
+        )
     )
 
-    print("\nPermutation feature importance:")
+    print(
+        "\nPermutation feature importance:"
+    )
+
     print(
         permutation_importance_df.to_string(
             index=False,
@@ -605,6 +772,12 @@ def main():
     ):
 
         # Hyperparameters
+
+        mlflow.log_param(
+            "target",
+            TARGET,
+        )
+
         mlflow.log_param(
             "n_estimators",
             best_n_estimators,
@@ -641,32 +814,54 @@ def main():
         )
 
         # Validation metrics
+
         mlflow.log_metric(
             "validation_accuracy",
-            float(best_configuration["validation_accuracy"]),
+            float(
+                best_configuration[
+                    "validation_accuracy"
+                ]
+            ),
         )
 
         mlflow.log_metric(
             "validation_precision",
-            float(best_configuration["validation_precision"]),
+            float(
+                best_configuration[
+                    "validation_precision"
+                ]
+            ),
         )
 
         mlflow.log_metric(
             "validation_recall",
-            float(best_configuration["validation_recall"]),
+            float(
+                best_configuration[
+                    "validation_recall"
+                ]
+            ),
         )
 
         mlflow.log_metric(
             "validation_f1",
-            float(best_configuration["validation_f1"]),
+            float(
+                best_configuration[
+                    "validation_f1"
+                ]
+            ),
         )
 
         mlflow.log_metric(
             "validation_roc_auc",
-            float(best_configuration["validation_roc_auc"]),
+            float(
+                best_configuration[
+                    "validation_roc_auc"
+                ]
+            ),
         )
 
         # OOB metrics
+
         mlflow.log_metric(
             "oob_score",
             float(oob_score),
@@ -678,32 +873,44 @@ def main():
         )
 
         # Random Forest test metrics
+
         mlflow.log_metric(
             "random_forest_test_accuracy",
-            random_forest_metrics["accuracy"],
+            random_forest_metrics[
+                "accuracy"
+            ],
         )
 
         mlflow.log_metric(
             "random_forest_test_precision",
-            random_forest_metrics["precision"],
+            random_forest_metrics[
+                "precision"
+            ],
         )
 
         mlflow.log_metric(
             "random_forest_test_recall",
-            random_forest_metrics["recall"],
+            random_forest_metrics[
+                "recall"
+            ],
         )
 
         mlflow.log_metric(
             "random_forest_test_f1",
-            random_forest_metrics["f1"],
+            random_forest_metrics[
+                "f1"
+            ],
         )
 
         mlflow.log_metric(
             "random_forest_test_roc_auc",
-            random_forest_metrics["roc_auc"],
+            random_forest_metrics[
+                "roc_auc"
+            ],
         )
 
         # Logistic Regression comparison
+
         mlflow.log_metric(
             "logistic_test_f1",
             logistic_metrics["f1"],
@@ -715,6 +922,7 @@ def main():
         )
 
         # Decision Tree comparison
+
         mlflow.log_metric(
             "decision_tree_test_f1",
             decision_tree_metrics["f1"],
@@ -726,7 +934,10 @@ def main():
         )
 
         # Permutation importance
-        for _, row in permutation_importance_df.iterrows():
+
+        for _, row in (
+            permutation_importance_df.iterrows()
+        ):
 
             feature_name = row["feature"]
 
@@ -739,7 +950,9 @@ def main():
 
             mlflow.log_metric(
                 f"permutation_importance_{safe_feature_name}",
-                float(row["importance_mean"]),
+                float(
+                    row["importance_mean"]
+                ),
             )
 
         mlflow.sklearn.log_model(
@@ -747,17 +960,29 @@ def main():
             name="random_forest_model",
         )
 
-        print("\nMLflow run logged successfully.")
+        print(
+            "\nMLflow run logged successfully."
+        )
 
     # ------------------------------------------------------------------
     # Final summary
     # ------------------------------------------------------------------
 
-    print("\n" + "=" * 70)
-    print("Random Forest pipeline completed.")
-    print("=" * 70)
+    print(
+        "\n" + "=" * 70
+    )
 
-    print("\nFinal Random Forest metrics:")
+    print(
+        "Random Forest pipeline completed."
+    )
+
+    print(
+        "=" * 70
+    )
+
+    print(
+        "\nFinal Random Forest metrics:"
+    )
 
     print(
         f"Accuracy : "

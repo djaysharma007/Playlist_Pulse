@@ -2,16 +2,23 @@
 PlaylistPulse - Logistic Regression Classification
 
 Target:
-    y
+    skip_within_30s
+
+Goal:
+    Predict whether a user will skip a track within the first 30 seconds.
 
 Features:
-    - userId
-    - itemId
-    - timestamp
+    - Audio features
+    - User and track identifiers
+    - Artist and genre
+    - Listening-time context
+    - User and track history
+    - Session position
 
 Feature engineering:
-    - One-hot encoding for userId and itemId
-    - Standardized timestamp
+    - One-hot encoding for categorical features
+    - Standardization for numerical features
+    - Timestamp converted into time-context features during data preparation
 
 Evaluation:
     Accuracy
@@ -22,10 +29,11 @@ Evaluation:
     Confusion Matrix
 
 MLflow:
-    Parameters, metrics, and model coefficients are logged.
+    Parameters and metrics are logged.
 """
 
 from pathlib import Path
+import sys
 
 import mlflow
 import numpy as np
@@ -58,15 +66,49 @@ RANDOM_STATE = 42
 TEST_SIZE = 0.20
 VALIDATION_SIZE = 0.25
 
-TARGET_COLUMN = "y"
+TARGET_COLUMN = "skip_within_30s"
+
+
+# ---------------------------------------------------------------------------
+# Feature definitions
+# ---------------------------------------------------------------------------
 
 CATEGORICAL_FEATURES = [
     "userId",
     "itemId",
+    "artist",
+    "genre",
 ]
 
+
 NUMERICAL_FEATURES = [
-    "timestamp",
+    # Audio features
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature",
+
+    # User / track history
+    "user_play_count",
+    "user_skip_rate",
+    "track_play_count",
+    "track_skip_rate",
+
+    # Listening context
+    "session_position",
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
 ]
 
 
@@ -75,14 +117,14 @@ NUMERICAL_FEATURES = [
 # ---------------------------------------------------------------------------
 
 def load_data():
-    """Load and validate the classification dataset."""
+    """Load and validate the PlaylistPulse classification dataset."""
 
     if not DATA_PATH.exists():
         raise FileNotFoundError(
             f"Classification dataset not found: {DATA_PATH}"
         )
 
-    print(f"Loading classification data from:\n{DATA_PATH}")
+    print(f"Loading classification data from: {DATA_PATH}")
 
     data = pd.read_csv(DATA_PATH)
 
@@ -93,7 +135,8 @@ def load_data():
     )
 
     missing_columns = [
-        column for column in required_columns
+        column
+        for column in required_columns
         if column not in data.columns
     ]
 
@@ -102,12 +145,20 @@ def load_data():
             f"Missing required columns: {missing_columns}"
         )
 
+    # Keep only columns needed by the model.
+    data = data[
+        required_columns
+    ].copy()
+
+    # Remove rows with missing model inputs.
     data = data.dropna(
         subset=required_columns
     ).reset_index(drop=True)
 
     # Target validation
-    unique_targets = sorted(data[TARGET_COLUMN].unique())
+    unique_targets = sorted(
+        data[TARGET_COLUMN].unique()
+    )
 
     if unique_targets != [0, 1]:
         raise ValueError(
@@ -116,16 +167,27 @@ def load_data():
         )
 
     # Numeric validation
-    for column in CATEGORICAL_FEATURES + NUMERICAL_FEATURES:
-        if not pd.api.types.is_numeric_dtype(data[column]):
+    for column in NUMERICAL_FEATURES:
+        if not pd.api.types.is_numeric_dtype(
+            data[column]
+        ):
             raise ValueError(
                 f"Column '{column}' must be numeric."
             )
 
     print(f"Samples loaded: {len(data)}")
-    print()
-    print("Target distribution:")
-    print(data[TARGET_COLUMN].value_counts().sort_index())
+
+    target_counts = (
+        data[TARGET_COLUMN]
+        .value_counts()
+        .sort_index()
+    )
+
+    print(
+        f"Target distribution: "
+        f"No Skip = {target_counts.get(0, 0)}, "
+        f"Skip = {target_counts.get(1, 0)}"
+    )
 
     return data
 
@@ -138,8 +200,8 @@ def build_preprocessor():
     """
     Build the preprocessing pipeline.
 
-    userId and itemId are treated as categorical variables rather than
-    continuous numerical quantities.
+    Categorical variables are one-hot encoded.
+    Numerical variables are standardized.
     """
 
     preprocessor = ColumnTransformer(
@@ -152,7 +214,7 @@ def build_preprocessor():
                 CATEGORICAL_FEATURES,
             ),
             (
-                "timestamp",
+                "numerical",
                 StandardScaler(),
                 NUMERICAL_FEATURES,
             ),
@@ -173,7 +235,10 @@ def evaluate_model(model, X, y):
     probabilities = model.predict_proba(X)[:, 1]
 
     metrics = {
-        "Accuracy": accuracy_score(y, predictions),
+        "Accuracy": accuracy_score(
+            y,
+            predictions,
+        ),
         "Precision": precision_score(
             y,
             predictions,
@@ -207,7 +272,6 @@ def main():
     print("=" * 60)
     print("PlaylistPulse - Logistic Regression Classification")
     print("=" * 60)
-    print()
 
     # -----------------------------------------------------------------------
     # Load data
@@ -216,7 +280,8 @@ def main():
     data = load_data()
 
     X = data[
-        CATEGORICAL_FEATURES + NUMERICAL_FEATURES
+        CATEGORICAL_FEATURES
+        + NUMERICAL_FEATURES
     ]
 
     y = data[TARGET_COLUMN]
@@ -242,10 +307,11 @@ def main():
         stratify=y_development,
     )
 
-    print()
-    print(f"Training samples: {len(X_train)}")
-    print(f"Validation samples: {len(X_validation)}")
-    print(f"Testing samples: {len(X_test)}")
+    print(
+        f"Split: train={len(X_train)}, "
+        f"validation={len(X_validation)}, "
+        f"test={len(X_test)}"
+    )
 
     # -----------------------------------------------------------------------
     # Build preprocessing + logistic regression pipeline
@@ -261,8 +327,14 @@ def main():
 
     pipeline = Pipeline(
         steps=[
-            ("preprocessor", preprocessor),
-            ("model", model),
+            (
+                "preprocessor",
+                preprocessor,
+            ),
+            (
+                "model",
+                model,
+            ),
         ]
     )
 
@@ -270,7 +342,6 @@ def main():
     # Training
     # -----------------------------------------------------------------------
 
-    print()
     print("Training logistic regression...")
 
     pipeline.fit(
@@ -288,24 +359,21 @@ def main():
         y_validation,
     )
 
-    print()
-    print("=" * 60)
-    print("Validation Metrics")
-    print("=" * 60)
+    print("\nValidation Metrics")
 
     for metric, value in validation_metrics.items():
-        print(f"{metric:<12} {value:.6f}")
+        print(f"{metric:<12} {value:.4f}")
 
     # -----------------------------------------------------------------------
     # Final training
-    #
-    # After model selection, retrain on the complete development set
-    # before evaluating on the untouched test set.
     # -----------------------------------------------------------------------
 
     final_pipeline = Pipeline(
         steps=[
-            ("preprocessor", build_preprocessor()),
+            (
+                "preprocessor",
+                build_preprocessor(),
+            ),
             (
                 "model",
                 LogisticRegression(
@@ -317,8 +385,7 @@ def main():
         ]
     )
 
-    print()
-    print("Retraining on complete development set...")
+    print("\nRetraining on complete development set...")
 
     final_pipeline.fit(
         X_development,
@@ -335,13 +402,10 @@ def main():
         y_test,
     )
 
-    print()
-    print("=" * 60)
-    print("Test Metrics")
-    print("=" * 60)
+    print("\nTest Metrics")
 
     for metric, value in test_metrics.items():
-        print(f"{metric:<12} {value:.6f}")
+        print(f"{metric:<12} {value:.4f}")
 
     # -----------------------------------------------------------------------
     # Confusion matrix
@@ -352,15 +416,15 @@ def main():
         test_predictions,
     )
 
-    print()
-    print("=" * 60)
-    print("Confusion Matrix")
-    print("=" * 60)
-
+    print("\nConfusion Matrix")
     print("                 Predicted")
     print("                 0      1")
-    print(f"Actual  0      {cm[0, 0]:<6} {cm[0, 1]}")
-    print(f"        1      {cm[1, 0]:<6} {cm[1, 1]}")
+    print(
+        f"Actual  0      {cm[0, 0]:<6} {cm[0, 1]}"
+    )
+    print(
+        f"        1      {cm[1, 0]:<6} {cm[1, 1]}"
+    )
 
     # -----------------------------------------------------------------------
     # MLflow tracking
@@ -450,11 +514,9 @@ def main():
             int(cm[1, 1]),
         )
 
-        print()
-        print("MLflow run logged successfully.")
+        print("\nMLflow run logged successfully.")
 
-    print()
-    print("Logistic regression pipeline completed.")
+    print("\nLogistic regression pipeline completed.")
 
 
 if __name__ == "__main__":

@@ -2,16 +2,19 @@
 PlaylistPulse - Decision Tree Classification
 
 Purpose:
-    Train and evaluate a Decision Tree classifier for the binary
-    classification target in classification.csv.
+    Train and evaluate a Decision Tree classifier for predicting
+    whether a user will skip a track within 30 seconds.
 
 Features:
-    userId
-    itemId
-    timestamp
+    Audio features
+    Artist / genre
+    User history
+    Track history
+    Session position
+    Time context
 
 Target:
-    y
+    skip_within_30s
 
 Model selection:
     Validation-set tuning of tree complexity using:
@@ -32,12 +35,8 @@ Analysis:
     - Top decision features
 
 MLflow:
-    Model parameters, validation results, test metrics, feature
-    importance, and split analysis are logged.
-
-Important:
-    The semantic meaning of y is not assumed. It is treated only
-    as a binary classification target.
+    Model parameters, validation results, test metrics,
+    feature importance, and split analysis are logged.
 """
 
 from pathlib import Path
@@ -81,13 +80,37 @@ VALIDATION_SIZE = 0.25
 CATEGORICAL_FEATURES = [
     "userId",
     "itemId",
+    "artist",
+    "genre",
 ]
 
 NUMERICAL_FEATURES = [
-    "timestamp",
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature",
+    "user_play_count",
+    "user_skip_rate",
+    "track_play_count",
+    "track_skip_rate",
+    "session_position",
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
 ]
 
-TARGET_COLUMN = "y"
+TARGET_COLUMN = "skip_within_30s"
+
 
 MAX_DEPTH_VALUES = [
     2,
@@ -129,6 +152,29 @@ def load_data():
 
     data = pd.read_csv(DATA_PATH)
 
+    # -----------------------------------------------------------------------
+    # Timestamp feature engineering
+    # -----------------------------------------------------------------------
+
+    if "timestamp" not in data.columns:
+        raise ValueError("Missing required column: timestamp")
+
+    data["timestamp"] = pd.to_datetime(
+        data["timestamp"],
+        errors="coerce",
+    )
+
+    data["hour"] = data["timestamp"].dt.hour
+    data["day_of_week"] = data["timestamp"].dt.dayofweek
+    data["month"] = data["timestamp"].dt.month
+    data["is_weekend"] = (
+        data["day_of_week"] >= 5
+    ).astype(int)
+
+    data = data.drop(
+        columns=["timestamp"]
+    )
+
     required_columns = (
         CATEGORICAL_FEATURES
         + NUMERICAL_FEATURES
@@ -156,23 +202,20 @@ def load_data():
 
     if not target_values.issubset({0, 1}):
         raise ValueError(
-            f"Target y must contain only 0 and 1. "
+            f"Target {TARGET_COLUMN} must contain only 0 and 1. "
             f"Found: {sorted(target_values)}"
         )
 
     if data[TARGET_COLUMN].nunique() != 2:
         raise ValueError(
-            "Target y must contain both classes."
+            f"Target {TARGET_COLUMN} must contain both classes."
         )
 
     print(f"Samples loaded: {len(data)}")
-
-    print("Class distribution:")
     print(
-        data[TARGET_COLUMN]
-        .value_counts()
-        .sort_index()
-        .to_string()
+        f"Target distribution: "
+        f"No Skip = {(data[TARGET_COLUMN] == 0).sum()}, "
+        f"Skip = {(data[TARGET_COLUMN] == 1).sum()}"
     )
 
     return data
@@ -323,7 +366,6 @@ def tune_decision_tree(
         * len(MIN_SAMPLES_LEAF_VALUES)
     )
 
-    print()
     print(
         f"Evaluating {total_candidates} "
         "Decision Tree configurations..."
@@ -375,30 +417,16 @@ def tune_decision_tree(
 
     print()
     print("Best validation configuration:")
-
     print(
-        f"max_depth: "
-        f"{best['max_depth']}"
+        f"max_depth={best['max_depth']}, "
+        f"min_samples_split={best['min_samples_split']}, "
+        f"min_samples_leaf={best['min_samples_leaf']}"
     )
-
     print(
-        f"min_samples_split: "
-        f"{best['min_samples_split']}"
+        f"Validation F1: {best['F1']:.4f}"
     )
-
     print(
-        f"min_samples_leaf: "
-        f"{best['min_samples_leaf']}"
-    )
-
-    print(
-        f"Validation F1: "
-        f"{best['F1']:.6f}"
-    )
-
-    print(
-        f"Validation ROC-AUC: "
-        f"{best['ROC_AUC']:.6f}"
+        f"Validation ROC-AUC: {best['ROC_AUC']:.4f}"
     )
 
     return results_df, best
@@ -454,9 +482,6 @@ def extract_feature_importance(model):
 def extract_tree_splits(model):
     """
     Extract actual internal decision-tree split nodes.
-
-    Each row represents an internal node where the tree made a
-    decision based on a feature and threshold.
     """
 
     preprocessor = model.named_steps[
@@ -622,18 +647,9 @@ def main():
     )
 
     print(
-        f"Training samples: "
-        f"{len(X_train)}"
-    )
-
-    print(
-        f"Validation samples: "
-        f"{len(X_validation)}"
-    )
-
-    print(
-        f"Testing samples: "
-        f"{len(X_test)}"
+        f"Split: train={len(X_train)}, "
+        f"validation={len(X_validation)}, "
+        f"test={len(X_test)}"
     )
 
     # -----------------------------------------------------------------------
@@ -652,12 +668,6 @@ def main():
         y_train,
     )
 
-    baseline_validation = evaluate_model(
-        baseline_model,
-        X_validation,
-        y_validation,
-    )
-
     # -----------------------------------------------------------------------
     # Decision Tree tuning
     # -----------------------------------------------------------------------
@@ -672,7 +682,7 @@ def main():
     )
 
     # -----------------------------------------------------------------------
-    # Safely extract selected parameters
+    # Selected parameters
     # -----------------------------------------------------------------------
 
     selected_max_depth = best_config[
@@ -708,7 +718,6 @@ def main():
         min_samples_leaf=selected_min_samples_leaf,
     )
 
-    # Fit only after hyperparameter selection.
     final_tree.fit(
         X_development,
         y_development,
@@ -752,7 +761,7 @@ def main():
     comparison = pd.DataFrame(
         [
             {
-                "Model": "Logistic Regression Baseline",
+                "Model": "Logistic Regression",
                 **baseline_test,
             },
             {
@@ -770,7 +779,7 @@ def main():
     print(
         comparison.to_string(
             index=False,
-            float_format=lambda value: f"{value:.6f}",
+            float_format=lambda value: f"{value:.4f}",
         )
     )
 
@@ -783,9 +792,8 @@ def main():
     )
 
     print()
-    print("=" * 60)
     print("Top Decision Tree Features")
-    print("=" * 60)
+    print("-" * 60)
 
     if importance_df.empty:
 
@@ -796,9 +804,9 @@ def main():
     else:
 
         print(
-            importance_df.head(15).to_string(
+            importance_df.head(10).to_string(
                 index=False,
-                float_format=lambda value: f"{value:.6f}",
+                float_format=lambda value: f"{value:.4f}",
             )
         )
 
@@ -811,9 +819,8 @@ def main():
     )
 
     print()
-    print("=" * 60)
     print("Top Decision Tree Splits")
-    print("=" * 60)
+    print("-" * 60)
 
     if split_df.empty:
 
@@ -824,9 +831,9 @@ def main():
     else:
 
         print(
-            split_df.head(15).to_string(
+            split_df.head(10).to_string(
                 index=False,
-                float_format=lambda value: f"{value:.6f}",
+                float_format=lambda value: f"{value:.4f}",
             )
         )
 
@@ -839,9 +846,8 @@ def main():
     ]
 
     print()
-    print("=" * 60)
     print("Decision Tree Structure")
-    print("=" * 60)
+    print("-" * 60)
 
     print(
         f"Tree depth: "
